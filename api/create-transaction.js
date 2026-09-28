@@ -2,6 +2,9 @@ const { auth, db, admin } = require("../lib/firebase");
 const { createSnapTransaction } = require("../lib/midtrans");
 
 const USD_TO_IDR = Number(process.env.USD_TO_IDR || 16000);
+// Must match DRIVER_FEE / TAX_PERCENT in the app (utils/priceExt.kt).
+const DRIVER_FEE = Number(process.env.DRIVER_FEE || 10000);
+const TAX_PERCENT = Number(process.env.TAX_PERCENT || 10);
 
 /**
  * POST /api/create-transaction
@@ -40,7 +43,9 @@ module.exports = async (req, res) => {
     const product = await productRes.json();
 
     const unitPrice = Math.round(product.price * USD_TO_IDR);
-    const grossAmount = unitPrice * qty;
+    const subtotal = unitPrice * qty;
+    const tax = Math.round((subtotal * TAX_PERCENT) / 100);
+    const grossAmount = subtotal + DRIVER_FEE + tax;
 
     // 4. Load customer details saved by the app (users/{uid}).
     const userDoc = await db.collection("users").doc(user.uid).get();
@@ -56,6 +61,9 @@ module.exports = async (req, res) => {
       thumbnail: product.thumbnail,
       qty,
       unitPrice,
+      subtotal,
+      driverFee: DRIVER_FEE,
+      tax,
       grossAmount,
       status: "PENDING",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -72,6 +80,9 @@ module.exports = async (req, res) => {
           quantity: qty,
           name: product.title.slice(0, 50), // Midtrans limit: 50 chars
         },
+        // Midtrans requires sum(price * quantity) of item_details == gross_amount.
+        { id: "DRIVER", price: DRIVER_FEE, quantity: 1, name: "Driver" },
+        { id: "TAX", price: tax, quantity: 1, name: `Tax ${TAX_PERCENT}%` },
       ],
       customer_details: {
         first_name: profile.fullName || profile.name || "Customer",
